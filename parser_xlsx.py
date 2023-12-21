@@ -1,36 +1,55 @@
 import sys
-import openpyxl
-from tabulate import tabulate
+import argparse
+import pandas as pd
+
+def list_sheets(file_path):
+    try:
+        sheets = pd.read_excel(file_path, sheet_name=None)
+        return list(sheets.keys())
+    except FileNotFoundError:
+        print(f"File '{file_path}' not found.")
+        return []
 
 def parse_sheet(file_path, sheet_name):
-    workbook = openpyxl.load_workbook(file_path, data_only=True)
-    sheet = workbook[sheet_name]
-
-    data = []
-    for row in sheet.iter_rows(values_only=True):
-        row_data = []
-        for cell_value in row:
-            if isinstance(cell_value, str) and cell_value.startswith('='):
-                try:
-                    cell_value = sheet[cell_value[1:]].value
-                    # Handle division by zero error
-                    if isinstance(cell_value, (int, float)) and cell_value == 0:
-                        cell_value = "DIV/0"
-                except Exception:
-                    cell_value = "ERROR"
-            row_data.append(cell_value)
-        data.append(row_data)
-
-    workbook.close()
-
-    table = tabulate(data, headers='firstrow', tablefmt='grid')
-    print(table)
+    try:
+        df = pd.read_excel(file_path, sheet_name=sheet_name)
+        df = df.fillna("None")  # Replace NaN values with "NaN"
+        print(df.to_string(index=False))
+    except FileNotFoundError:
+        print(f"File '{file_path}' not found.")
+    except KeyError:
+        print(f"Sheet '{sheet_name}' does not exist in the Excel file.")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python script_name.py path/to/your/file.xlsx sheet_name")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Excel Parser")
+    parser.add_argument("file_path", help="Path to the Excel file")
+    parser.add_argument("--sheet", help="Name of the sheet to parse")
+    args = parser.parse_args()
 
-    excel_file_path = sys.argv[1]
-    sheet_name = sys.argv[2]
-    parse_sheet(excel_file_path, sheet_name)
+    excel_file_path = args.file_path
+
+    # List available sheets
+    available_sheets = list_sheets(excel_file_path)
+    print("Available sheets in the Excel file:")
+    for i, sheet in enumerate(available_sheets):
+        print(f"{i+1}. {sheet}")
+
+    # Select sheet to parse
+    if args.sheet:
+        sheet_name = args.sheet
+    else:
+        sheet_option = input("Enter the number of the sheet to parse (or enter the sheet name manually): ")
+        try:
+            sheet_index = int(sheet_option) - 1
+            if sheet_index >= 0 and sheet_index < len(available_sheets):
+                sheet_name = available_sheets[sheet_index]
+            else:
+                raise ValueError
+        except ValueError:
+            sheet_name = sheet_option
+
+    # Check if the specified sheet exists and parse it if it does
+    if sheet_name in available_sheets:
+        parse_sheet(excel_file_path, sheet_name)
+    else:
+        print(f"Sheet '{sheet_name}' does not exist in the Excel file.")
