@@ -150,35 +150,134 @@ spec:
       address: us-allocator.example.com
 ```
 
-- **scheduling.strategy**: Specifies `MultiCluster` to enable multi-cluster allocation.
-- **clusters**: Lists the clusters available for allocation, each with its name and the allocator service address.
+### mTLS (Mutual TLS) in Agones
 
-### Multi-Cluster Allocation Architecture
+Mutual TLS (mTLS) is a security protocol where both the client and server authenticate each other using certificates. This is especially important for ensuring secure communication between different services in a Kubernetes cluster, such as between the **game clients** and **Agones controllers**, or between **Agones controllers** and **game servers**.
+
+### Why Agones Needs mTLS
+
+1. **Secure Communication**: Game servers often communicate with external services or other clusters (e.g., allocation requests between clusters or regions). mTLS ensures that only authenticated and trusted services can communicate with each other, preventing man-in-the-middle attacks and unauthorized access.
+  
+2. **Authentication**: mTLS ensures that both the client (game server) and the server (Agones controller) are authenticated before establishing communication.
+
+3. **Encryption**: All communication is encrypted, adding an extra layer of protection for sensitive data, such as player statistics or game session information.
+
+### Example Setup for mTLS in Agones
+
+1. **Generate Certificates**: Create the **root certificate**, **server certificate**, and **client certificate** using tools like OpenSSL.
+
+2. **Set Up the Agones Allocator**: Configure the Agones allocator service to use the **server certificates**.
+
+   Example allocator deployment:
+
+   ```yaml
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: agones-allocator
+     namespace: agones-system
+   spec:
+     template:
+       spec:
+         containers:
+           - name: agones-allocator
+             image: gcr.io/agones-images/allocator:1.14.0
+             ports:
+               - containerPort: 8443  # mTLS port
+             volumeMounts:
+               - name: tls-certs
+                 mountPath: /etc/tls
+         volumes:
+           - name: tls-certs
+             secret:
+               secretName: agones-allocator-tls
+   ```
+
+3. **Client-Side Allocation Request Using mTLS**: When allocating a fleet or game server, the client sends the request along with the **client certificate** for mutual authentication.
+
+   Example allocation request using mTLS with `curl`:
+
+   ```bash
+   curl -v --cert client.crt --key client.key --cacert ca.crt      -H "Content-Type: application/json"      --data '{
+       "namespace": "default",
+       "required": {
+         "matchLabels": {
+           "agones.dev/fleet": "example-fleet"
+         }
+       }
+     }' https://agones-allocator:8443/v1/gameserverallocation
+   ```
+
+### Diagram: mTLS in Agones Allocation
 
 ```mermaid
 graph TD;
-    A[Global Agones Allocator] -->|Allocation Request| B[Cluster Europe];
-    A -->|Allocation Request| C[Cluster US];
-    A -->|Allocation Request| D[Cluster Asia];
-    B --> E[Europe GameServer Pods];
-    C --> F[US GameServer Pods];
-    D --> G[Asia GameServer Pods];
-    B --> H[Remote Agones Allocator - Europe];
-    C --> I[Remote Agones Allocator - US];
-    D --> J[Remote Agones Allocator - Asia];
-    H -->|Allocates| E;
-    I -->|Allocates| F;
-    J -->|Allocates| G;
-    A -->|Response| K[Player/Matchmaker];
-    K --> L[Connects to Allocated GameServer];
+    A[GameClient] -->|mTLS Request| B[Agones Allocator];
+    B -->|Authenticates Client Certificate| C[Allocator Service];
+    C -->|Allocates GameServer| D[GameServer];
+    D -->|Response| A;
 ```
 
-- **Global Agones Allocator**: Routes allocation requests to the appropriate cluster.
-- **Remote Agones Allocators**: Handle local game server allocation within their respective clusters.
-- **GameServer Pods**: Represent game server instances that are managed locally by each cluster's allocator.
 
-### Benefits of Multi-Cluster Allocation
+## 10. Fleet and GameServer Autoscaling
 
-- **Geographic Flexibility**: Allows players to connect to the nearest or best-performing cluster, reducing latency.
-- **High Availability**: Ensures that if a cluster is down or full, other clusters can still serve player requests.
-- **Resource Optimization**: Balances the load across multiple clusters, utilizing resources more efficiently.
+Autoscaling in Agones allows fleets and game servers to automatically scale up and down based on game server demand or predefined metrics. This is especially useful for handling dynamic workloads, optimizing resource use, and ensuring high availability for players.
+
+### FleetAutoscaler
+
+The **FleetAutoscaler** resource allows you to define how a fleet of game servers should be automatically scaled based on certain conditions.
+
+### Example: FleetAutoscaler Manifest
+
+```yaml
+apiVersion: "agones.dev/v1"
+kind: FleetAutoscaler
+metadata:
+  name: example-fleet-autoscaler
+spec:
+  fleetName: example-fleet
+  policy:
+    type: Buffer
+    buffer:
+      # Ensure there are always 2 extra GameServers ready to handle new players.
+      bufferSize: 2
+      minReplicas: 1
+      maxReplicas: 10
+```
+
+### GameServer Autoscaling with Custom Metrics
+
+You can also autoscale based on **custom metrics** using a webhook or external metrics server. This allows scaling based on metrics such as CPU usage, memory, or even game-specific metrics like the number of connected players.
+
+### Example: FleetAutoscaler with Custom Metrics
+
+```yaml
+apiVersion: "agones.dev/v1"
+kind: FleetAutoscaler
+metadata:
+  name: custom-metrics-autoscaler
+spec:
+  fleetName: example-fleet
+  policy:
+    type: Webhook
+    webhook:
+      service:
+        name: custom-metrics-service
+        namespace: custom-namespace
+        path: /scale
+      timeoutSeconds: 30
+  scale:
+    minReplicas: 1
+    maxReplicas: 50
+```
+
+### Diagram for FleetAutoscaler
+
+```mermaid
+graph TD;
+    A[FleetAutoscaler] -->|Buffer/Custom Metrics| B[Fleet];
+    B --> C[GameServer Pods];
+    A -->|Increase Buffer/Scale| D[GameServer Pods];
+    D --> E[Players Connect];
+```
+
